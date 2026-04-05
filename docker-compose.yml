@@ -1,0 +1,49 @@
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  service:
+    build:
+      context: ./service
+      dockerfile: Dockerfile
+    command: ["npm", "run", "dev"]
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      MONGODB_URI: mongodb://mongo:27017/appdb
+    volumes:
+      - ./service:/app
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:3000
+    volumes:
+      - ./client:/app
+      # Host node_modules is macOS; Vite/Rolldown needs Linux bindings inside the container.
+      - client_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    depends_on:
+      - service
+
+volumes:
+  mongo_data:
+  client_node_modules:
