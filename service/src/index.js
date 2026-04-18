@@ -1,8 +1,20 @@
-import "dotenv/config";
+import { config } from "dotenv";
+config();
 import cors from "cors";
 import express from "express";
 import mongoose from "mongoose";
 import multer from "multer";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { v4 as uuidv4 } from "uuid";
+
+const S3_CLIENT = new S3Client({
+  region: 'ap-south-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -52,6 +64,26 @@ app.get("/api/uploads", async (_req, res, next) => {
       .lean();
     res.json(uploads);
   } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/presigned-url", async (req, res, next) => {
+  try {
+    const key = uuidv4();
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: key,
+    });
+
+    const signedUrl = await getSignedUrl(S3_CLIENT, command, {
+      expiresIn: 3600, // 1 hour
+    });
+
+    res.json({ signedUrl, key });
+  }
+  catch (err) {
     next(err);
   }
 });

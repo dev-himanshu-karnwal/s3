@@ -22,6 +22,8 @@ services:
     environment:
       PORT: "3000"
       MONGODB_URI: mongodb://mongo:27017/appdb
+    env_file:
+      - ./service/.env
     volumes:
       - ./service:/app
     depends_on:
