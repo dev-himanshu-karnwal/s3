@@ -58,21 +58,61 @@ function App() {
       setMessage({ type: 'err', text: 'Choose an image file first.' })
       return
     }
-
-    const body = new FormData()
-    body.append('image', file)
+    if (!file.type.startsWith('image/')) {
+      setMessage({ type: 'err', text: 'Only image files are supported.' })
+      return
+    }
 
     setUploading(true)
     try {
-      const res = await fetch(`${apiBase}/api/uploads`, {
-        method: 'POST',
-        body,
-      })
-      const data = (await res.json().catch(() => ({}))) as { error?: string }
-      if (!res.ok) {
-        throw new Error(data.error || `Upload failed (${res.status})`)
+      const presignRes = await fetch(
+        `${apiBase}/api/presigned-url?contentType=${encodeURIComponent(file.type)}`,
+      )
+      const presignBody = (await presignRes.json().catch(() => ({}))) as {
+        error?: string
+        signedUrl?: string
+        key?: string
       }
-      setMessage({ type: 'ok', text: 'Metadata saved. File bytes are not stored yet.' })
+      
+      if (!presignRes.ok) {
+        throw new Error(presignBody.error || `Presign failed (${presignRes.status})`)
+      }
+
+      const { signedUrl, key } = presignBody
+      if (!signedUrl || !key) {
+        throw new Error('Presign response missing signedUrl or key')
+      }
+
+      const putRes = await fetch(signedUrl, {
+        method: 'PUT',
+        body: file,
+        headers: { 'Content-Type': file.type },
+      })
+      
+      if (!putRes.ok) {
+        throw new Error(
+          `Direct upload to S3 failed (${putRes.status}). Check bucket CORS and credentials.`,
+        )
+      }
+
+      const completeRes = await fetch(`${apiBase}/api/uploads/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key,
+          originalName: file.name,
+          mimeType: file.type,
+          size: file.size,
+        }),
+      })
+      const completeBody = (await completeRes.json().catch(() => ({}))) as {
+        error?: string
+      }
+      if (!completeRes.ok) {
+        throw new Error(completeBody.error || `Save failed (${completeRes.status})`)
+      }
+
+      setMessage({ type: 'ok', text: 'Image uploaded to S3 and record saved.' })
       input.value = ''
       await loadUploads()
     } catch (e) {
@@ -87,10 +127,11 @@ function App() {
 
   return (
     <main className="upload-page">
-      <h1>Image uploassds</h1>
+      <h1>Image uploads</h1>
       <p className="upload-lead">
-        The API records <strong>metadata</strong> in MongoDB. Binary data is discarded
-        for now; cloud storage can be wired in later via <code>storageUrl</code>.
+        Files go straight to S3 using a short-lived presigned URL, then the app stores
+        metadata and the object URL in MongoDB. Your S3 bucket must allow{' '}
+        <code>PUT</code> from this site’s origin via CORS.
       </p>
 
       <form className="upload-form" onSubmit={onSubmit}>
@@ -105,7 +146,7 @@ function App() {
           />
         </label>
         <button className="upload-submit" type="submit" disabled={uploading}>
-          {uploading ? 'Uploading…' : 'Upload'}
+          {uploading ? 'Uploading…' : 'Upload to S3'}
         </button>
       </form>
 
@@ -129,6 +170,21 @@ function App() {
           <ul className="upload-list">
             {uploads.map((u) => (
               <li key={u._id} className="upload-card">
+                {u.storageUrl ? (
+                  <a
+                    className="upload-thumb-link"
+                    href={u.storageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <img
+                      className="upload-thumb"
+                      src={u.storageUrl}
+                      alt=""
+                      loading="lazy"
+                    />
+                  </a>
+                ) : null}
                 <div className="upload-card-name" title={u.originalName}>
                   {u.originalName}
                 </div>
@@ -138,7 +194,13 @@ function App() {
                   <span className="upload-id">{u._id}</span>
                 </div>
                 <div className="upload-card-storage">
-                  storage: {u.storageUrl ?? 'pending'}
+                  {u.storageUrl ? (
+                    <a href={u.storageUrl} target="_blank" rel="noreferrer">
+                      {u.storageUrl}
+                    </a>
+                  ) : (
+                    <>storage: pending</>
+                  )}
                 </div>
               </li>
             ))}

@@ -3,13 +3,14 @@ config();
 import cors from "cors";
 import express from "express";
 import mongoose from "mongoose";
-import multer from "multer";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, validate as uuidValidate } from "uuid";
+
+const AWS_REGION = process.env.AWS_REGION || "ap-south-1";
 
 const S3_CLIENT = new S3Client({
-  region: 'ap-south-1',
+  region: AWS_REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -22,18 +23,6 @@ const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/appdb";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024; // 15MB
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_IMAGE_BYTES },
-  fileFilter(_req, file, cb) {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only image files are allowed"));
-    }
-  },
-});
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -71,65 +60,73 @@ app.get("/api/uploads", async (_req, res, next) => {
 app.get("/api/presigned-url", async (req, res, next) => {
   try {
     const key = uuidv4();
+    const raw =
+      typeof req.query.contentType === "string" ? req.query.contentType : "";
+    const contentType = raw.startsWith("image/") ? raw : undefined;
 
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: key,
+      ...(contentType ? { ContentType: contentType } : {}),
     });
 
     const signedUrl = await getSignedUrl(S3_CLIENT, command, {
-      expiresIn: 60, // 1 minute 
+      expiresIn: 60, // 1 minute
     });
 
     res.json({ signedUrl, key });
-  }
-  catch (err) {
+  } catch (err) {
     next(err);
   }
 });
 
-app.post("/api/uploads", (req, res, next) => {
-  upload.single("image")(req, res, async (err) => {
-    if (err) {
-      next(err);
+/** After browser PUTs the object to S3 using the presigned URL, persist metadata + public URL. */
+app.post("/api/uploads/complete", async (req, res, next) => {
+  try {
+    const { key, originalName, mimeType, size } = req.body ?? {};
+    if (!key || typeof key !== "string" || !uuidValidate(key)) {
+      res.status(400).json({ error: "key must be a valid UUID object key" });
       return;
     }
-    try {
-      const file = req.file;
-      if (!file) {
-        res
-          .status(400)
-          .json({ error: "image file is required (field name: image)" });
-        return;
-      }
-      const doc = await ImageUpload.create({
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-      });
-      res.status(201).json(doc);
-    } catch (e) {
-      next(e);
+    if (
+      !originalName ||
+      typeof originalName !== "string" ||
+      typeof mimeType !== "string" ||
+      typeof size !== "number" ||
+      !Number.isFinite(size) ||
+      size < 0
+    ) {
+      res
+        .status(400)
+        .json({ error: "originalName, mimeType, and size are required" });
+      return;
     }
-  });
-});
-
-app.use((err, _req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    if (err.code === "LIMIT_FILE_SIZE") {
+    if (!mimeType.startsWith("image/")) {
+      res.status(400).json({ error: "Only image mime types are allowed" });
+      return;
+    }
+    if (size > MAX_IMAGE_BYTES) {
       res.status(400).json({
         error: `Image must be at most ${MAX_IMAGE_BYTES} bytes`,
       });
       return;
     }
-    res.status(400).json({ error: err.message });
-    return;
+    const bucket = process.env.AWS_BUCKET_NAME;
+    if (!bucket) {
+      res.status(500).json({ error: "Bucket not configured" });
+      return;
+    }
+    const storageUrl = `https://${bucket}.s3.${AWS_REGION}.amazonaws.com/${key}`;
+    const doc = await ImageUpload.create({
+      originalName: originalName.slice(0, 500),
+      mimeType,
+      size,
+      storageUrl,
+    });
+    res.status(201).json(doc);
+  } catch (err) {
+    next(err);
   }
-  if (err?.message === "Only image files are allowed") {
-    res.status(400).json({ error: err.message });
-    return;
-  }
-  next(err);
 });
 
 app.use((err, _req, res, _next) => {
