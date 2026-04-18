@@ -78,7 +78,7 @@ app.get("/api/presigned-url", async (req, res, next) => {
     });
 
     const signedUrl = await getSignedUrl(S3_CLIENT, command, {
-      expiresIn: 3600, // 1 hour
+      expiresIn: 60, // 1 minute 
     });
 
     res.json({ signedUrl, key });
