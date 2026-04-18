@@ -59,15 +59,14 @@ app.get("/api/uploads", async (_req, res, next) => {
 
 app.get("/api/presigned-url", async (req, res, next) => {
   try {
-    const key = uuidv4();
     const raw =
       typeof req.query.contentType === "string" ? req.query.contentType : "";
-    const contentType = raw.startsWith("image/") ? raw : undefined;
+    const contentType = raw.startsWith("image/") ? raw.split("/")[1] : undefined;
+    const key = uuidv4() + "." + contentType;
 
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: key,
-      ...(contentType ? { ContentType: contentType } : {}),
     });
 
     const signedUrl = await getSignedUrl(S3_CLIENT, command, {
@@ -84,7 +83,7 @@ app.get("/api/presigned-url", async (req, res, next) => {
 app.post("/api/uploads/complete", async (req, res, next) => {
   try {
     const { key, originalName, mimeType, size } = req.body ?? {};
-    if (!key || typeof key !== "string" || !uuidValidate(key)) {
+    if (!key || typeof key !== "string" || !uuidValidate(key.split(".")[0])) {
       res.status(400).json({ error: "key must be a valid UUID object key" });
       return;
     }
@@ -116,10 +115,10 @@ app.post("/api/uploads/complete", async (req, res, next) => {
       res.status(500).json({ error: "Bucket not configured" });
       return;
     }
-    const storageUrl = `https://${bucket}.s3.${AWS_REGION}.amazonaws.com/${key}`;
+    const storageUrl = key;
     const doc = await ImageUpload.create({
       originalName: originalName.slice(0, 500),
-      mimeType,
+      mimeType: mimeType.split("/")[1] || mimeType,
       size,
       storageUrl,
     });

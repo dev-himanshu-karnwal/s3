@@ -173,13 +173,13 @@ function App() {
                 {u.storageUrl ? (
                   <a
                     className="upload-thumb-link"
-                    href={u.storageUrl}
+                    href={`https://d38xopqjew9krb.cloudfront.net/${u.storageUrl}`}
                     target="_blank"
                     rel="noreferrer"
                   >
                     <img
                       className="upload-thumb"
-                      src={u.storageUrl}
+                      src={`https://d38xopqjew9krb.cloudfront.net/${u.storageUrl}`}
                       alt=""
                       loading="lazy"
                     />
